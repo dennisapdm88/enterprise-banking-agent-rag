@@ -1,0 +1,23 @@
+{
+  "name": "enterprise-banking-agent-rag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote Loan Approval Multi-Agent System with LangGraph and semantic RAG scaffolding.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^0.2.0",
+    "@langchain/openai": "^0.3.17",
+    "@langchain/textsplitters": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
