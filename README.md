@@ -1,6 +1,8 @@
 # Enterprise Banking Agent RAG
 
-A production-ready **Remote Loan Approval Multi-Agent System** built with modern ES Modules, TypeScript, and LangGraph.js. This project demonstrates enterprise-grade AI patterns: Multi-Agent Orchestration, Semantic RAG pipeline with Vector storage, and Human-in-the-Loop (HITL) checkpoints.
+This is a demonstration project to show case usage in langchain tools. 
+
+Loan Approval Multi-Agent System** built with modern ES Modules, TypeScript, and LangGraph.js. This project demonstrates enterprise-grade AI patterns: Multi-Agent Orchestration, Semantic RAG pipeline with Vector storage, and Human-in-the-Loop (HITL) checkpoints.
 
 ## 🏗️ System Architecture
 
