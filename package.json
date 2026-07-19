@@ -11,9 +11,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "dotenv": "^16.6.1",
+    "@langchain/core": "^0.3.0",
     "@langchain/langgraph": "^0.2.0",
     "@langchain/openai": "^0.3.17",
-    "@langchain/textsplitters": "^0.1.0"
+    "@langchain/textsplitters": "^0.1.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

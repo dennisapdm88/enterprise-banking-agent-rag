@@ -1,10 +1,12 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { VectorStore } from "@langchain/core/vectorstores";
+import type { EmbeddingsInterface } from "@langchain/core/embeddings";
+import type { Document } from "@langchain/core/documents";
 
 export interface VectorDocument {
   id: string;
   content: string;
-  embedding: number[];
 }
 
 export interface SearchResult extends VectorDocument {
@@ -16,10 +18,54 @@ interface IngestDocumentInput {
   text: string;
 }
 
-const documents: VectorDocument[] = [];
+/**
+ * Simple in-memory vector store implementation using LangChain's VectorStore base
+ */
+class SimpleMemoryVectorStore extends VectorStore {
+  _vectorstoreType() {
+    return "simple-memory";
+  }
+
+  documents: Document[] = [];
+
+  constructor(embeddings: EmbeddingsInterface) {
+    super(embeddings, {});
+  }
+
+  async addDocuments(docs: Document[]): Promise<void> {
+    this.documents.push(...docs);
+  }
+
+  async similaritySearchWithScore(query: string, k = 3): Promise<[Document, number][]> {
+    const queryEmbedding = await this.embeddings.embedQuery(query);
+    
+    const results = this.documents.map((doc) => {
+      const docEmbedding = (doc.metadata?.embedding as number[]) || [];
+      const score = cosineSimilarity(queryEmbedding, docEmbedding);
+      return [doc, score] as [Document, number];
+    });
+
+    return results.sort((a, b) => b[1] - a[1]).slice(0, k);
+  }
+
+  async similaritySearchVectorWithScore(): Promise<[Document, number][]> {
+    // Not implemented - we use similaritySearchWithScore instead
+    return [];
+  }
+
+  async addVectors(): Promise<void> {
+    // Not needed for our implementation
+  }
+
+  async delete(): Promise<void> {
+    // Not needed for our implementation
+  }
+}
+
+let vectorStore: SimpleMemoryVectorStore | null = null;
 let embeddingsClient: OpenAIEmbeddings | null = null;
 
-export async function chunkText(text: string, size = 500, overlap = 80): Promise<string[]> {
+export async function chunkText(text: string, size = 400, overlap = 80): Promise<string[]> {
   const splitter = new RecursiveCharacterTextSplitter({
     chunkSize: size,
     chunkOverlap: overlap,
@@ -27,47 +73,79 @@ export async function chunkText(text: string, size = 500, overlap = 80): Promise
   return splitter.splitText(text);
 }
 
+async function getOrCreateVectorStore(): Promise<SimpleMemoryVectorStore> {
+  if (vectorStore) {
+    return vectorStore;
+  }
+
+  const embeddings = getEmbeddingsClient();
+  vectorStore = new SimpleMemoryVectorStore(embeddings);
+  return vectorStore;
+}
+
 export async function ingestDocument({ id, text }: IngestDocumentInput): Promise<VectorDocument[]> {
-  const chunks = await chunkText(text);
-  const embeddings = await embedDocuments(chunks);
+  const cleanedText = sanitizeDocumentText(text);
+  const chunks = await chunkText(cleanedText);
+
+  // Get embeddings for each chunk
+  const embeddings = await getEmbeddingsClient().embedDocuments(chunks);
+
+  const store = await getOrCreateVectorStore();
+  const documents = chunks.map((content, index) => ({
+    pageContent: content,
+    metadata: {
+      id: `${id}-${index}`,
+      source: id,
+      embedding: embeddings[index], // Store embedding in metadata
+    },
+  }));
+
+  await store.addDocuments(documents);
 
   const indexedChunks = chunks.map((content, index) => ({
     id: `${id}-${index}`,
     content,
-    embedding: embeddings[index],
   }));
 
   console.info(
     `[vectorStore] indexed=${indexedChunks.length} approx_tokens=${estimateTokenUsage(chunks.join(" "))} provider=${getEmbeddingProvider()}`
   );
 
-  documents.push(...indexedChunks);
   return indexedChunks;
 }
 
 export async function searchDocuments(query: string, limit = 3): Promise<SearchResult[]> {
-  const queryVector = await embedQuery(query);
+  if (!vectorStore) {
+    console.warn("[vectorStore] Vector store not initialized. No documents have been ingested yet.");
+    return [];
+  }
 
-  return documents
-    .map((item) => ({
-      ...item,
-      score: cosineSimilarity(queryVector, item.embedding),
-    }))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+  try {
+    const results = await vectorStore.similaritySearchWithScore(query, limit);
+    return results.map(([doc, score]: [any, number]) => ({
+      id: doc.metadata?.id ?? "unknown",
+      content: doc.pageContent,
+      score,
+    }));
+  } catch (error) {
+    console.error("[vectorStore] Search failed:", error);
+    return [];
+  }
 }
 
 export function clearVectorStore(): void {
-  documents.length = 0;
+  vectorStore = null;
 }
 
 function getEmbeddingProvider(): "openai" | "local-fallback" {
   return process.env.OPENAI_API_KEY ? "openai" : "local-fallback";
 }
 
-function getEmbeddingsClient(): OpenAIEmbeddings | null {
+function getEmbeddingsClient(): OpenAIEmbeddings {
   if (!process.env.OPENAI_API_KEY) {
-    return null;
+    throw new Error(
+      "[vectorStore] OPENAI_API_KEY is required to use MemoryVectorStore. Please set it in your .env file."
+    );
   }
 
   if (!embeddingsClient) {
@@ -80,49 +158,22 @@ function getEmbeddingsClient(): OpenAIEmbeddings | null {
   return embeddingsClient;
 }
 
-async function embedDocuments(texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) {
-    return [];
-  }
-
-  const client = getEmbeddingsClient();
-  if (!client) {
-    return texts.map((text) => fakeEmbedding(text));
-  }
-
-  try {
-    const vectors = await client.embedDocuments(texts);
-    return vectors;
-  } catch (error) {
-    console.warn("[vectorStore] OpenAI embedDocuments failed, using local fallback.", error);
-    return texts.map((text) => fakeEmbedding(text));
-  }
-}
-
-async function embedQuery(text: string): Promise<number[]> {
-  const client = getEmbeddingsClient();
-  if (!client) {
-    return fakeEmbedding(text);
-  }
-
-  try {
-    return await client.embedQuery(text);
-  } catch (error) {
-    console.warn("[vectorStore] OpenAI embedQuery failed, using local fallback.", error);
-    return fakeEmbedding(text);
-  }
-}
-
 function estimateTokenUsage(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-function fakeEmbedding(text: string): number[] {
-  const vector = new Array<number>(16).fill(0);
-  for (let index = 0; index < text.length; index += 1) {
-    vector[index % vector.length] += text.charCodeAt(index) / 255;
-  }
-  return vector;
+function sanitizeDocumentText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const filtered = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line))
+    .filter((line) => !/^\d+$/.test(line))
+    .filter((line) => !/^(tap or click to|monthly\s+report|financial\s+report)$/i.test(line))
+    .filter((line) => !/page layout documents|template chooser|document body/i.test(line));
+
+  const cleaned = filtered.join("\n");
+  return cleaned.trim().length > 0 ? cleaned : text;
 }
 
 function cosineSimilarity(left: number[], right: number[]): number {
